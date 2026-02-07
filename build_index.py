@@ -1,8 +1,12 @@
 import os
+import gc
 import json
 import pandas as pd
+import chromadb
 from langchain_core.documents import Document
 from langchain_chroma import Chroma
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_openai import OpenAIEmbeddings
 
 PARQUET_FILENAME = "docker_docs_rag.parquet"
 
@@ -87,13 +91,70 @@ def _df_to_docs(df: pd.DataFrame):
 CHROMA_DIR = os.path.join(os.path.dirname(__file__), "chroma")
 COLLECTION_NAME = "docker_docs_rag"
 
+def delete_index():
+    """Usuwa dane indeksu z bazy Chroma (kolekcję). Nie usuwa plików katalogu chroma/."""
+    if not os.path.isdir(CHROMA_DIR):
+        return False
+    gc.collect()  # zwolnij ewentualne referencje do Chroma (graf/retriever)
+    try:
+        client = chromadb.PersistentClient(path=CHROMA_DIR)
+        try:
+            client.delete_collection(name=COLLECTION_NAME)
+        except ValueError:
+            # kolekcja nie istnieje – uznajemy za sukces (brak danych)
+            pass
+        return True
+    except Exception as e:
+        raise RuntimeError(f"Nie udało się wyczyścić indeksu Chroma: {e}") from e
+
+
+def rebuild_index(chunk_size: int = 400, chunk_overlap: int = 100):
+    """
+    Usuwa indeks i buduje go od zera z podanymi parametrami chunków.
+    chunk_size – długość chunka (znaki/tokenami), chunk_overlap – nakładka między chunkami.
+    """
+    delete_index()
+    df = _load_dataframe()
+    docs = _df_to_docs(df)
+    if not docs:
+        os.makedirs(os.path.dirname(CHROMA_DIR) or ".", exist_ok=True)
+        embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+        vs = Chroma.from_documents(
+            [Document(page_content="(brak dokumentów)", metadata={})],
+            embeddings,
+            collection_name=COLLECTION_NAME,
+            persist_directory=CHROMA_DIR,
+        )
+        return vs
+    text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+    )
+    doc_splits = text_splitter.split_documents(docs)
+    embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+    os.makedirs(os.path.dirname(CHROMA_DIR) or ".", exist_ok=True)
+    vs = Chroma.from_documents(
+        doc_splits,
+        embeddings,
+        collection_name=COLLECTION_NAME,
+        persist_directory=CHROMA_DIR,
+    )
+    return vs
+
+
 def _build_vectorstore(doc_splits, embeddings):
     """Buduje lub ładuje Chroma; zwraca vectorstore."""
     force_rebuild = os.environ.get("REBUILD_INDEX", "").lower() in ("1", "true", "yes")
     if force_rebuild and os.path.isdir(CHROMA_DIR):
-        import shutil
-        shutil.rmtree(CHROMA_DIR)
-        print("🔄 REBUILD_INDEX=1 — usunięto stary indeks, budowanie od zera...")
+        try:
+            client = chromadb.PersistentClient(path=CHROMA_DIR)
+            try:
+                client.delete_collection(name=COLLECTION_NAME)
+            except ValueError:
+                pass
+        except Exception:
+            pass
+        print("🔄 REBUILD_INDEX=1 — wyczyszczono dane indeksu, budowanie od zera...")
     if doc_splits and os.path.isdir(CHROMA_DIR) and os.listdir(CHROMA_DIR):
         try:
             vs = Chroma(

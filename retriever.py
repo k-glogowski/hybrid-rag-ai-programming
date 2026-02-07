@@ -9,7 +9,8 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from dotenv import load_dotenv
 load_dotenv()
 
-def get_retriever():
+def get_retriever(k: int = 4):
+    """Retriever z dokumentacji Docker. k – liczba chunków zwracanych przy wyszukiwaniu."""
     df = _load_dataframe()
     docs = _df_to_docs(df)
     text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
@@ -19,7 +20,7 @@ def get_retriever():
     doc_splits = text_splitter.split_documents(docs) if docs else []
     embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
     vectorstore = _build_vectorstore(doc_splits, embeddings)
-    return vectorstore.as_retriever()
+    return vectorstore.as_retriever(search_kwargs={"k": k})
 
 if __name__ == "__main__":
     retriever = get_retriever()
