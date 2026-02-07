@@ -9,13 +9,13 @@ from langchain_core.messages import HumanMessage
 from langgraph.prebuilt import ToolNode, tools_condition
 
 DEFAULT_RESPONSE_MODEL = "openai/gpt-4o"
-DEFAULT_GRADER_MODEL = "deepseek/deepseek-chat"
+DEFAULT_GRADER_MODEL = "deepseek/deepseek-v3.2-speciale"
 
 AVAILABLE_MODELS = [
     "openai/gpt-4o",
     "openai/gpt-4o-mini",
     "meta-llama/llama-3.1-70b-instruct",
-    "deepseek/deepseek-chat",
+    "deepseek/deepseek-v3.2-speciale",
 ]
 
 
@@ -64,6 +64,28 @@ GENERATE_PROMPT = (
 )
 
 
+def _get_last_user_question(messages: list) -> str:
+    """Pobiera treść ostatniego pytania użytkownika (działa przy jednej wiadomości i przy pełnej historii z app.py)."""
+    for m in reversed(messages):
+        if isinstance(m, HumanMessage) and getattr(m, "content", None):
+            content = m.content
+            return content if isinstance(content, str) else str(content)
+    if messages:
+        first = messages[0]
+        content = getattr(first, "content", "")
+        return content if isinstance(content, str) else str(content)
+    return ""
+
+def _get_context_as_string(messages: list) -> str:
+    """Ostatnia wiadomość to wynik retrievera; content może być str lub list."""
+    if not messages:
+        return ""
+    raw = messages[-1].content
+    if isinstance(raw, list):
+        return "\n\n".join(str(x) for x in raw)
+    return str(raw) if raw is not None else ""
+
+
 def create_graph(
     response_model_name: str = DEFAULT_RESPONSE_MODEL,
     grader_model_name: str = DEFAULT_GRADER_MODEL,
@@ -77,8 +99,8 @@ def create_graph(
         return {"messages": [response]}
 
     def grade_documents(state: MessagesState) -> Literal["generate_answer", "rewrite_question"]:
-        question = state["messages"][0].content
-        context = state["messages"][-1].content
+        question = _get_last_user_question(state["messages"])
+        context = _get_context_as_string(state["messages"])
         prompt = GRADE_PROMPT.format(question=question, context=context)
         response = grader_model.with_structured_output(GradeDocuments).invoke(
             [{"role": "user", "content": prompt}]
@@ -87,14 +109,14 @@ def create_graph(
         return "generate_answer" if score == "yes" else "rewrite_question"
 
     def rewrite_question(state: MessagesState):
-        question = state["messages"][0].content
+        question = _get_last_user_question(state["messages"])
         prompt = REWRITE_PROMPT.format(question=question)
         response = response_model.invoke([{"role": "user", "content": prompt}])
         return {"messages": [HumanMessage(content=response.content)]}
 
     def generate_answer(state: MessagesState):
-        question = state["messages"][0].content
-        context = state["messages"][-1].content
+        question = _get_last_user_question(state["messages"])
+        context = _get_context_as_string(state["messages"])
         prompt = GENERATE_PROMPT.format(question=question, context=context)
         response = response_model.invoke([{"role": "user", "content": prompt}])
         return {"messages": [response]}
