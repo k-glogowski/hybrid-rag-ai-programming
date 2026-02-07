@@ -1,0 +1,9 @@
+kagglehub
+pandas
+pyarrow
+fastparquet
+langchain
+langchain-chroma
+langchain-openai
+langchain-core
+langchain-text-splitters
