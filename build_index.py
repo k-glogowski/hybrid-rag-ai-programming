@@ -123,13 +123,73 @@ def _build_vectorstore(doc_splits, embeddings):
     )
     return vs
 
-from langchain_core.tools import create_retriever_tool
 from langchain_openai import OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from dotenv import load_dotenv
+
 load_dotenv()
 
+
+def clear_chroma_db():
+    """Usuwa wpisy z bazy Chroma (bez usuwania plików/katalogu)."""
+    if not os.path.isdir(CHROMA_DIR):
+        return False
+    try:
+        import chromadb
+        client = chromadb.PersistentClient(path=CHROMA_DIR)
+        client.delete_collection(name=COLLECTION_NAME)
+        return True
+    except Exception:
+        return False
+
+
+def load_data_to_vectorstore(chunk_size: int = 400, chunk_overlap: int = 100):
+    """
+    Wczytuje dane z parquet, dzieli z podanymi parametrami i buduje indeks Chroma.
+    Zwraca liczbę chunków lub None przy błędzie.
+    """
+    clear_chroma_db()
+    _download_from_kaggle()
+    df = _load_dataframe()
+    if df.empty:
+        return None
+    docs = _df_to_docs(df)
+    text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+    )
+    doc_splits = text_splitter.split_documents(docs)
+    if not doc_splits:
+        return 0
+    embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+    os.makedirs(os.path.dirname(CHROMA_DIR) or ".", exist_ok=True)
+    Chroma.from_documents(
+        doc_splits,
+        embeddings,
+        collection_name=COLLECTION_NAME,
+        persist_directory=CHROMA_DIR,
+    )
+    return len(doc_splits)
+
+
+def get_retriever(k: int = 4):
+    """
+    Zwraca retriever z aktualnej bazy Chroma (search_kwargs k).
+    Jeśli baza nie istnieje, zwraca None.
+    """
+    if not os.path.isdir(CHROMA_DIR) or not os.listdir(CHROMA_DIR):
+        return None
+    embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+    vectorstore = Chroma(
+        collection_name=COLLECTION_NAME,
+        embedding_function=embeddings,
+        persist_directory=CHROMA_DIR,
+    )
+    return vectorstore.as_retriever(search_kwargs={"k": k})
+
+
 if __name__ == "__main__":
+    from langchain_core.tools import create_retriever_tool
     _download_from_kaggle()
     df = _load_dataframe()
     docs = _df_to_docs(df)
@@ -143,14 +203,15 @@ if __name__ == "__main__":
 
     _embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
     _vectorstore = _build_vectorstore(doc_splits, _embeddings)
-    retriever = _vectorstore.as_retriever()
+    retriever = _vectorstore.as_retriever(search_kwargs={"k": 4})
 
     retriever_tool = create_retriever_tool(
         retriever,
         "search_docker_docs",
         "Wyszukuj fragmenty dokumentacji Docker (instrukcje, API, konfiguracja, opisy).",
     )
-    results = retriever.invoke("Jak zainstalować Docker Desktop na Linuxie?")
+    results = retriever.invoke("How to expose ports in Docker?")
+
     if results:
         print(results[0].page_content)
     else:

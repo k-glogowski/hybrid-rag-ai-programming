@@ -7,3 +7,5 @@ langchain-chroma
 langchain-openai
 langchain-core
 langchain-text-splitters
+streamlit
+python-dotenv
