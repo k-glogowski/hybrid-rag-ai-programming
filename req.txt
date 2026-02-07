@@ -7,3 +7,6 @@ langchain-chroma
 langchain-openai
 langchain-core
 langchain-text-splitters
+langsmith[openai-agents]
+langgraph
+streamlit

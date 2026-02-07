@@ -8,18 +8,25 @@ from typing import Literal
 from langchain_core.messages import HumanMessage
 from langgraph.prebuilt import ToolNode, tools_condition
 
-response_model = ChatOpenAI(
-    model="openai/gpt-4o",
-    temperature=0.0,
-    api_key=os.getenv("OPENROUTER_API_KEY"),
-    base_url=os.getenv("OPENROUTER_BASE_URL"),
-)
-grader_model = ChatOpenAI(
-    model="deepseek/deepseek-v3.2-speciale",
-    temperature=0.0,
-    api_key=os.getenv("OPENROUTER_API_KEY"),
-    base_url=os.getenv("OPENROUTER_BASE_URL"),
-)
+DEFAULT_RESPONSE_MODEL = "openai/gpt-4o"
+DEFAULT_GRADER_MODEL = "deepseek/deepseek-chat"
+
+AVAILABLE_MODELS = [
+    "openai/gpt-4o",
+    "openai/gpt-4o-mini",
+    "meta-llama/llama-3.1-70b-instruct",
+    "deepseek/deepseek-chat",
+]
+
+
+def _create_llm(model: str) -> ChatOpenAI:
+    return ChatOpenAI(
+        model=model,
+        temperature=0.0,
+        api_key=os.getenv("OPENROUTER_API_KEY"),
+        base_url=os.getenv("OPENROUTER_BASE_URL"),
+    )
+
 
 retriever = get_retriever()
 retriever_tool = create_retriever_tool(
@@ -27,13 +34,6 @@ retriever_tool = create_retriever_tool(
     "search_docker_docs",
     "Wyszukuj fragmenty dokumentacji Docker (instrukcje, API, konfiguracja, opisy).",
 )
-
-def generate_query_or_respond(state: MessagesState):
-    """
-    LLM decyduje: wywołać tool search_docker_docs (RAG) albo odpowiedzieć od razu.
-    """
-    response = response_model.bind_tools([retriever_tool]).invoke(state["messages"])
-    return {"messages": [response]}
 
 GRADE_PROMPT = (
     "Jesteś graderem oceniającym, czy znaleziony fragment dokumentacji Docker jest istotny względem pytania użytkownika.\n"
@@ -48,19 +48,6 @@ class GradeDocuments(BaseModel):
         description="Relevance score: 'yes' jeśli istotne, 'no' jeśli nie"
     )
 
-def grade_documents(
-    state: MessagesState,
-) -> Literal["generate_answer", "rewrite_question"]:
-    """Sprawdza, czy zwrócone fragmenty dokumentacji są istotne."""
-    question = state["messages"][0].content
-    context = state["messages"][-1].content
-    prompt = GRADE_PROMPT.format(question=question, context=context)
-    response = grader_model.with_structured_output(GradeDocuments).invoke(
-        [{"role": "user", "content": prompt}]
-    )
-    score = response.binary_score.strip().lower()
-    return "generate_answer" if score == "yes" else "rewrite_question"
-
 REWRITE_PROMPT = (
     "Popraw pytanie użytkownika tak, aby było bardziej precyzyjne w kontekście dokumentacji Docker.\n"
     "Weź pod uwagę: komendy, konfigurację, API, konkretne funkcje lub narzędzia.\n"
@@ -68,14 +55,6 @@ REWRITE_PROMPT = (
     "Zwróć jedno, lepsze pytanie."
 )
 
-def rewrite_question(state: MessagesState):
-    question = state["messages"][0].content
-    prompt = REWRITE_PROMPT.format(question=question)
-    response = response_model.invoke([{"role": "user", "content": prompt}])
-    return {"messages": [HumanMessage(content=response.content)]}
-
-
-# --- Generate answer ---
 GENERATE_PROMPT = (
     "Jesteś asystentem pomagającym w dokumentacji Docker.\n"
     "Korzystaj z poniższego kontekstu (fragmenty dokumentacji), aby odpowiedzieć na pytanie.\n"
@@ -85,31 +64,58 @@ GENERATE_PROMPT = (
 )
 
 
-def generate_answer(state: MessagesState):
-    question = state["messages"][0].content
-    context = state["messages"][-1].content
-    prompt = GENERATE_PROMPT.format(question=question, context=context)
-    response = response_model.invoke([{"role": "user", "content": prompt}])
-    return {"messages": [response]}
+def create_graph(
+    response_model_name: str = DEFAULT_RESPONSE_MODEL,
+    grader_model_name: str = DEFAULT_GRADER_MODEL,
+):
+    """Tworzy skompilowany graf workflow z wybranymi modelami."""
+    response_model = _create_llm(response_model_name)
+    grader_model = _create_llm(grader_model_name)
+
+    def generate_query_or_respond(state: MessagesState):
+        response = response_model.bind_tools([retriever_tool]).invoke(state["messages"])
+        return {"messages": [response]}
+
+    def grade_documents(state: MessagesState) -> Literal["generate_answer", "rewrite_question"]:
+        question = state["messages"][0].content
+        context = state["messages"][-1].content
+        prompt = GRADE_PROMPT.format(question=question, context=context)
+        response = grader_model.with_structured_output(GradeDocuments).invoke(
+            [{"role": "user", "content": prompt}]
+        )
+        score = response.binary_score.strip().lower()
+        return "generate_answer" if score == "yes" else "rewrite_question"
+
+    def rewrite_question(state: MessagesState):
+        question = state["messages"][0].content
+        prompt = REWRITE_PROMPT.format(question=question)
+        response = response_model.invoke([{"role": "user", "content": prompt}])
+        return {"messages": [HumanMessage(content=response.content)]}
+
+    def generate_answer(state: MessagesState):
+        question = state["messages"][0].content
+        context = state["messages"][-1].content
+        prompt = GENERATE_PROMPT.format(question=question, context=context)
+        response = response_model.invoke([{"role": "user", "content": prompt}])
+        return {"messages": [response]}
+
+    workflow = StateGraph(MessagesState)
+    workflow.add_node("generate_query_or_respond", generate_query_or_respond)
+    workflow.add_node("retrieve", ToolNode([retriever_tool]))
+    workflow.add_node("rewrite_question", rewrite_question)
+    workflow.add_node("generate_answer", generate_answer)
+
+    workflow.add_edge(START, "generate_query_or_respond")
+    workflow.add_conditional_edges(
+        "generate_query_or_respond",
+        tools_condition,
+        {"tools": "retrieve", END: END},
+    )
+    workflow.add_conditional_edges("retrieve", grade_documents)
+    workflow.add_edge("generate_answer", END)
+    workflow.add_edge("rewrite_question", "generate_query_or_respond")
+
+    return workflow.compile()
 
 
-workflow = StateGraph(MessagesState)
-workflow.add_node(generate_query_or_respond)
-workflow.add_node("retrieve", ToolNode([retriever_tool]))
-workflow.add_node(rewrite_question)
-workflow.add_node(generate_answer)
-
-workflow.add_edge(START, "generate_query_or_respond")
-workflow.add_conditional_edges(
-    "generate_query_or_respond",
-    tools_condition,
-    {"tools": "retrieve", END: END},
-)
-workflow.add_conditional_edges("retrieve", grade_documents)
-workflow.add_edge("generate_answer", END)
-workflow.add_edge("rewrite_question", "generate_query_or_respond")
-
-graph = workflow.compile()
-
-result = (graph.invoke({"messages": [HumanMessage(content="Jak zainstalować Docker Desktop na Linuxie?")]}))
-print(result["messages"][-1].content)
+graph = create_graph()
