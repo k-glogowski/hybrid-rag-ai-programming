@@ -6,7 +6,7 @@ from retriever import get_retriever
 from langchain_core.tools import create_retriever_tool
 from pydantic import BaseModel, Field
 from typing import Literal
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, RemoveMessage
 from langgraph.prebuilt import ToolNode, tools_condition
 
 
@@ -20,6 +20,27 @@ def last_user_content(messages):
 
 class State(MessagesState):
     summary: str
+
+
+def mark_old_messages_removed(state: State):
+    """
+    Oznacza wszystkie wiadomości oprócz ostatniej jako Removed (do usunięcia przy merge),
+    ale tylko gdy summary jest zdefiniowane i nie jest pustym stringiem.
+    """
+    summary = (state.get("summary") or "").strip()
+    if not summary:
+        return {}
+    messages = state.get("messages") or []
+    if len(messages) <= 1:
+        return {}
+    to_remove = []
+    for m in messages[:-1]:
+        msg_id = getattr(m, "id", None)
+        if msg_id is not None:
+            to_remove.append(RemoveMessage(id=msg_id))
+    if not to_remove:
+        return {}
+    return {"messages": to_remove}
 
 
 SUMMARY_PROMPT = (
@@ -47,7 +68,6 @@ def summarize_conversation(state: State):
     ]
     response = response_model.invoke(messages)
     return {"summary": response.content}
-
 
 
 retriever = get_retriever()
@@ -133,17 +153,19 @@ def generate_answer(state: State):
 
 
 workflow = StateGraph(State)
+workflow.add_node("startowy", mark_old_messages_removed)
 workflow.add_node(generate_query_or_respond)
 workflow.add_node("retrieve", ToolNode([retriever_tool]))
 workflow.add_node(rewrite_question)
 workflow.add_node(generate_answer)
 workflow.add_node(summarize_conversation)
 
-workflow.add_edge(START, "generate_query_or_respond")
+workflow.add_edge(START, "startowy")
+workflow.add_edge("startowy", "generate_query_or_respond")
 workflow.add_conditional_edges(
     "generate_query_or_respond",
     tools_condition,
-    {"tools": "retrieve", END: END},
+    {"tools": "retrieve", END: "summarize_conversation"},
 )
 workflow.add_conditional_edges("retrieve", grade_documents)
 workflow.add_edge("generate_answer", "summarize_conversation")

@@ -1,3 +1,4 @@
+python-dotenv
 kagglehub
 pandas
 pyarrow
@@ -7,3 +8,5 @@ langchain-chroma
 langchain-openai
 langchain-core
 langchain-text-splitters
+langgraph
+streamlit
