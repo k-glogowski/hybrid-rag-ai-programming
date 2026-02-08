@@ -43,9 +43,17 @@ def mark_old_messages_removed(state: State):
     return {"messages": to_remove}
 
 
-SUMMARY_PROMPT = (
+SUMMARY_PROMPT_BASE = (
     "Podsumuj krótko (2–4 zdania) całą rozmowę: pytania użytkownika i udzielone odpowiedzi. "
     "Skup się na tematach i wnioskach. Odpowiadaj po polsku."
+)
+
+SUMMARY_PROMPT_WITH_EXISTING = (
+    "Istniejące podsumowanie poprzedniej części rozmowy:\n"
+    "---\n{existing_summary}\n---\n\n"
+    "Uwzględnij powyższe podsumowanie przy generowaniu nowego. "
+    "Stwórz zaktualizowane podsumowanie (2–4 zdania), które obejmuje zarówno treść z istniejącego podsumowania, "
+    "jak i najnowsze wiadomości – pytania i odpowiedzi. Zachowaj spójność i ciągłość. Odpowiadaj po polsku."
 )
 
 response_model = ChatOpenAI(
@@ -63,8 +71,13 @@ grader_model = ChatOpenAI(
 )
 
 def summarize_conversation(state: State):
+    existing_summary = (state.get("summary") or "").strip()
+    if existing_summary:
+        prompt = SUMMARY_PROMPT_WITH_EXISTING.format(existing_summary=existing_summary)
+    else:
+        prompt = SUMMARY_PROMPT_BASE
     messages = state["messages"] + [
-        HumanMessage(content=SUMMARY_PROMPT),
+        HumanMessage(content=prompt),
     ]
     response = response_model.invoke(messages)
     return {"summary": response.content}
