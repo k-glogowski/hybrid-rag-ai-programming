@@ -36,13 +36,15 @@ Odpowiedź asystenta: {actual}
 Podaj score od 0.0 do 1.0 (1.0 = odpowiedź w pełni poprawna / pokrywa oczekiwaną, 0.0 = całkowicie błędna lub nie na temat)."""
 
 client = Client()
-dataset_name = "Docker_RAG_Evaluation_v1"
+dataset_name = "Docker_RAG_Evaluation_v5"
 
 # Przykładowe dane testowe
 examples = [
     ("Czym jest docker-compose.yml?", "To plik konfiguracyjny YAML służący do definiowania i uruchamiania wielokontenerowych aplikacji Docker."),
     ("Jak usunąć wszystkie nieużywane obrazy?", "Użyj komendy docker image prune -a."),
     ("Jak zainstalować Docker Desktop na Ubuntu?", "Należy pobrać najnowszy pakiet .deb i użyć komendy sudo apt-get install ./docker-desktop.deb."),
+    # ("Jak zainstalować Docker Desktop na Debianie?", "Litwo ojczyzno moja ty jesteś jak zdrowie."),
+    ("Jak zaimplementować helthcheck w docker compose?", 'W docker-compose.yml dodaj do serwisu blok healthcheck z test (np. ["CMD", "curl", "-f", "http://localhost:8080/health"]) oraz opcjonalnie interval, timeout i retries. Dzięki temu docker compose ps pokaże status (healthy)/(unhealthy), a inne serwisy mogą użyć depends_on z condition: service_healthy.')
 ]
 
 
