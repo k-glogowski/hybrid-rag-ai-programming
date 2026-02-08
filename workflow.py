@@ -111,5 +111,5 @@ workflow.add_edge("rewrite_question", "generate_query_or_respond")
 
 graph = workflow.compile()
 
-result = (graph.invoke({"messages": [HumanMessage(content="Jak zainstalować Docker Desktop na Linuxie?")]}))
+result = (graph.invoke({"messages": [HumanMessage(content="Jak zainstalować Docker Desktop na Linuxie?")]}, config={"configurable": {"max_concurrency": 3}}))
 print(result["messages"][-1].content)

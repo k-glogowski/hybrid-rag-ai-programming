@@ -97,5 +97,16 @@ orchestrator_builder.add_edge("synthesizer", END)
 
 orchestrator = orchestrator_builder.compile()
 
-result = orchestrator.invoke({"topic": "Instalacja Docker Desktop na Linuxie"})
-print(result["final_report"])
+
+def run_orchestrator(topic: str) -> str:
+    """Uruchamia workflow i zwraca wygenerowany raport dokumentacji."""
+    result = orchestrator.invoke(
+        {"topic": topic},
+        {"configurable": {"max_concurrency": 3}},
+    )
+    return result.get("final_report", "")
+
+
+if __name__ == "__main__":
+    result = run_orchestrator("Instalacja Docker Desktop na Linuxie")
+    print(result)
