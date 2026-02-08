@@ -97,5 +97,6 @@ orchestrator_builder.add_edge("synthesizer", END)
 
 orchestrator = orchestrator_builder.compile()
 
-result = orchestrator.invoke({"topic": "Instalacja Docker Desktop na Linuxie"})
-print(result["final_report"])
+if __name__ == "__main__":
+    result = orchestrator.invoke({"topic": "Instalacja Docker Desktop na Linuxie"})
+    print(result["final_report"])
